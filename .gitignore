@@ -1,0 +1,19 @@
+# スクリプトデータ（JSON）は共有リポジトリに含めない
+*.json
+
+# 環境ごとの設定（.env.example のみコミットする）
+.env
+
+# アイコン実体は repo/icons（L:\MayaScriptsManager\repo\icons）に一本化。
+# git ではツール自身のアイコンとソース素材(psb)のみ管理する。
+repo/icons/*.png
+!repo/icons/mayascriptsmanager.png
+
+# OMC / エージェントの内部状態
+.omc/
+
+# OS / エディタ
+Thumbs.db
+*.tmp
+__pycache__/
+*.pyc
