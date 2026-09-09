@@ -63,17 +63,29 @@ STRINGS = {
                           "en": "Failed to export scripts: {}"},
 
     "import_ok_title":   {"ja": "インポート成功",                 "en": "Import Complete"},
-    "import_ok_msg":     {"ja": "{} からスクリプトをインポートしました。",
-                          "en": "Scripts imported from {}."},
+    "import_ok_msg":     {"ja": "{} からインポートしました。\n"
+                                "追加: {} 件 / スキップ（同名のため）: {} 件",
+                          "en": "Imported from {}.\n"
+                                "Added: {} / Skipped (same name): {}"},
     "import_err_title":  {"ja": "インポートエラー",               "en": "Import Error"},
     "import_err_msg":    {"ja": "スクリプトの読み込みエラー: {}",
                           "en": "Failed to import scripts: {}"},
 
-    "success_title":     {"ja": "成功",                           "en": "Success"},
     "run_mel_ok":        {"ja": "MEL スクリプト '{}' 実行完了",   "en": "MEL script '{}' executed."},
     "run_py_ok":         {"ja": "Python スクリプト '{}' 実行完了", "en": "Python script '{}' executed."},
     "run_err_title":     {"ja": "実行エラー",                     "en": "Execution Error"},
     "run_err_msg":       {"ja": "スクリプトの実行エラー: {}",     "en": "Failed to run script: {}"},
+
+    "overwrite_title":   {"ja": "上書き確認",                     "en": "Overwrite"},
+    "overwrite_msg":     {"ja": "「{}」は既に登録されています。上書きしますか？",
+                          "en": "\"{}\" is already registered. Overwrite it?"},
+    "btn_overwrite":     {"ja": "上書き",                         "en": "Overwrite"},
+
+    "delete_title":      {"ja": "削除確認",                       "en": "Delete"},
+    "delete_msg":        {"ja": "「{}」を削除します。よろしいですか？\n"
+                                "この操作は元に戻せません。",
+                          "en": "Delete \"{}\"?\nThis cannot be undone."},
+    "btn_delete":        {"ja": "削除",                           "en": "Delete"},
 
     "credit":            {"ja": "Developed by seitanmen",        "en": "Developed by seitanmen"},
 }
@@ -125,6 +137,25 @@ class MayaScriptsManagerUI:
             except Exception:
                 pass
         return s
+
+    def notify(self, message):
+        """軽い完了通知。ダイアログを出さずビューポートとログに表示する。"""
+        print("MayaScriptsManager: {}".format(message))
+        try:
+            cmds.inViewMessage(assistMessage=message, position="midCenter",
+                               fade=True, fadeOutTime=2.0)
+        except Exception:
+            pass
+
+    def clearForm(self):
+        """入力フォームを初期状態に戻し、表示をスクリプトタブへ戻す。"""
+        cmds.textField(self.scriptNameField, edit=True, text="")
+        cmds.scrollField(self.scriptArea, edit=True, text="")
+        cmds.scrollField(self.doubleClickArea, edit=True, text="")
+        cmds.textField(self.tooltipsField, edit=True, text="")
+        cmds.textField(self.iconPathField, edit=True, text="")
+        cmds.radioButtonGrp(self.scriptTypeRadio, edit=True, select=1)
+        cmds.tabLayout(self.editTabs, edit=True, selectTabIndex=1)
 
     def loadEnv(self):
         """スクリプトと同じ場所の .env を読み込み、KEY=VALUE の辞書を返す。
@@ -362,6 +393,22 @@ class MayaScriptsManagerUI:
                                message=self.tr("err_name_content"))
             return
 
+        # 別名の既存スクリプトを潰さないよう確認する。
+        # （リストで選択中のものを編集して再登録する通常フローでは確認しない）
+        if scriptName in self.Scripts and scriptName != self.selectedScriptName:
+            cancel = self.tr("btn_cancel")
+            overwrite = self.tr("btn_overwrite")
+            answer = cmds.confirmDialog(
+                title=self.tr("overwrite_title"),
+                message=self.tr("overwrite_msg", scriptName),
+                button=[overwrite, cancel],
+                defaultButton=cancel,
+                cancelButton=cancel,
+                dismissString=cancel
+            )
+            if answer != overwrite:
+                return
+
         # スクリプト情報を辞書に保存
         self.Scripts[scriptName] = {
             "content": scriptContent,
@@ -375,14 +422,7 @@ class MayaScriptsManagerUI:
         self.refreshScriptList()
 
         # フィールドをクリア
-        cmds.textField(self.scriptNameField, edit=True, text="")
-        cmds.scrollField(self.scriptArea, edit=True, text="")
-        cmds.scrollField(self.doubleClickArea, edit=True, text="")
-        cmds.textField(self.tooltipsField, edit=True, text="")
-        cmds.textField(self.iconPathField, edit=True, text="")
-        cmds.radioButtonGrp(self.scriptTypeRadio, edit=True, select=1)
-        # 表示をスクリプトタブに戻す
-        cmds.tabLayout(self.editTabs, edit=True, selectTabIndex=1)
+        self.clearForm()
 
     def getSelectedType(self):
         """ラジオボタンの選択から "mel" / "python" を返す"""
@@ -453,15 +493,17 @@ class MayaScriptsManagerUI:
         gShelfTopLevel = mel.eval('$gShelfTopLevel=$gShelfTopLevel')
         currentShelfTab = cmds.tabLayout(gShelfTopLevel, query=True, selectTab=True)
 
-        # アイコンパスの確認
-        icon = script_info.get("icon", "commandButton.png")
+        # アイコンパスの確認（リスト表示と同じ解決規則を使う。
+        # JSON のアイコンは共有ドライブの絶対パスなので、未接続の環境では
+        # 相対探索 → Maya 既定アイコンへフォールバックさせる）
+        icon = self.resolveIcon(script_info.get("icon", ""))
 
         # スクリプトタイプを解決（保存済みなら自動、未設定ならダイアログ）
         sourceType = self.resolveScriptType(script_info)
         if sourceType is None:
             return  # キャンセルされた場合は何もしない
 
-        command = script_info["content"]
+        command = script_info.get("content", "")
 
         # シェルフボタン作成
         shelfButtonArgs = {
@@ -636,22 +678,30 @@ class MayaScriptsManagerUI:
                     imported_scripts = json.load(f)
 
                 # 既存のスクリプトに追加（上書きを避けるため）
+                added = 0
+                skipped = 0
                 for name, content in imported_scripts.items():
-                    if name not in self.Scripts:
-                        # 旧JSON互換: 新キーが無ければ空文字で補完
-                        self.Scripts[name] = {
-                            "content": content.get("content", ""),
-                            "doubleClickContent": content.get("doubleClickContent", ""),
-                            "tooltips": content.get("tooltips", ""),
-                            "icon": content.get("icon", ""),
-                            "type": content.get("type", "")
-                        }
+                    if name in self.Scripts:
+                        skipped += 1
+                        continue
+                    # 旧JSON互換: 新キーが無ければ空文字で補完
+                    self.Scripts[name] = {
+                        "content": content.get("content", ""),
+                        "doubleClickContent": content.get("doubleClickContent", ""),
+                        "tooltips": content.get("tooltips", ""),
+                        "icon": content.get("icon", ""),
+                        "type": content.get("type", "")
+                    }
+                    added += 1
 
                 self.saveScripts()
                 self.refreshScriptList()
 
-                cmds.confirmDialog(title=self.tr("import_ok_title"),
-                                   message=self.tr("import_ok_msg", importPath[0]))
+                # 同名はスキップするため、件数を出さないと「読み込んだのに
+                # 増えない」ように見える
+                cmds.confirmDialog(
+                    title=self.tr("import_ok_title"),
+                    message=self.tr("import_ok_msg", importPath[0], added, skipped))
             except Exception as e:
                 cmds.confirmDialog(title=self.tr("import_err_title"),
                                    message=self.tr("import_err_msg", str(e)))
@@ -676,12 +726,14 @@ class MayaScriptsManagerUI:
         try:
             if scriptType == 'mel':
                 mel.eval(scriptContent)
-                cmds.confirmDialog(title=self.tr("success_title"),
-                                   message=self.tr("run_mel_ok", selectedScript))
+                self.notify(self.tr("run_mel_ok", selectedScript))
             elif scriptType == 'python':
-                exec(scriptContent)
-                cmds.confirmDialog(title=self.tr("success_title"),
-                                   message=self.tr("run_py_ok", selectedScript))
+                # 独立したグローバル辞書で実行する。メソッドのローカルスコープで
+                # exec すると、スクリプト内で定義した関数/クラスが互いを参照できず
+                # NameError になるため。cmds / mel は従来どおり参照可能にしておく。
+                scriptGlobals = {"__name__": "__main__", "cmds": cmds, "mel": mel}
+                exec(scriptContent, scriptGlobals)
+                self.notify(self.tr("run_py_ok", selectedScript))
         except Exception as e:
             cmds.confirmDialog(title=self.tr("run_err_title"),
                                message=self.tr("run_err_msg", str(e)))
@@ -695,16 +747,29 @@ class MayaScriptsManagerUI:
                                message=self.tr("err_select_delete"))
             return
 
+        # 削除は取り消せないので確認する
+        cancel = self.tr("btn_cancel")
+        delete = self.tr("btn_delete")
+        answer = cmds.confirmDialog(
+            title=self.tr("delete_title"),
+            message=self.tr("delete_msg", selectedScript),
+            button=[delete, cancel],
+            defaultButton=cancel,
+            cancelButton=cancel,
+            dismissString=cancel
+        )
+        if answer != delete:
+            return
+
         # スクリプトを辞書から削除
-        del self.Scripts[selectedScript]
+        self.Scripts.pop(selectedScript, None)
         self.selectedScriptName = None
 
         self.saveScripts()
         self.refreshScriptList()
 
         # フィールドをクリア
-        cmds.textField(self.scriptNameField, edit=True, text="")
-        cmds.scrollField(self.scriptArea, edit=True, text="")
+        self.clearForm()
 
 
 # UIを作成 / Create and show the UI
