@@ -26,7 +26,8 @@ UI は日本語 / 英語に対応しています（自動判定、`.env` で切�
 
 ## インストール（ドラッグ&ドロップ）
 
-1. 配布フォルダ（例: `L:\MayaScriptsManager`）をチームでアクセスできる場所に配置します。
+1. 配布フォルダ（例: `X:\MayaScriptsManager`。X: は各自の共有ドライブ）を
+   チームでアクセスできる場所に配置します。
 2. **`DragAndDrop_Install.py` を Maya のビューポートへドラッグ&ドロップ**します。
 
 これだけで、以下が自動で行われます。
@@ -42,7 +43,7 @@ UI は日本語 / 英語に対応しています（自動判定、`.env` で切�
 ## フォルダ構成（配置先の想定レイアウト）
 
 ```
-L:\MayaScriptsManager\
+X:\MayaScriptsManager\
 ├─ DragAndDrop_Install.py        ← Maya へドラッグしてインストール
 ├─ mayascriptsmanager.py           ← 本体
 ├─ .env                          ← 設定（インストーラが自動生成 / 手動編集も可）
@@ -67,11 +68,17 @@ SCRIPT_REPO_PATH=X:\path\to\MayaScriptsManager\repo
 
 # UI 言語: "ja" または "en"（未指定なら Maya の UI 言語から自動判定）
 LANG=en
+
+# 旧名で作成済みのシェルフボタンも掃除したい場合のみ指定（カンマ区切り、任意）
+LEGACY_SHELF_NAMES=
 ```
 
 - `SCRIPT_REPO_PATH` … 書き出し／読み込みダイアログの初期フォルダになります。
 - 未設定・フォルダが存在しない場合は、通常の初期フォルダで開きます（動作には影響しません）。
 - `LANG` … UI 言語（`ja` / `en`）。未指定なら Maya の UI 言語で自動判定（日本語以外は英語）。
+- `LEGACY_SHELF_NAMES` … 過去に別名で配布していた場合の旧ボタン名（カンマ区切り）。
+  インストーラが重複ボタンを掃除する際の対象に加えます。環境ごとの値なので
+  リポジトリには持たせず、`.env` にだけ書きます。未指定なら現行名のみ掃除します。
 
 ---
 
@@ -149,7 +156,12 @@ with open(script_path, encoding='utf-8') as f:
 ```
 SCRIPT_REPO_PATH=X:\path\to\MayaScriptsManager\repo   # start folder for export/import
 LANG=en                                               # "ja" / "en" (auto if omitted)
+LEGACY_SHELF_NAMES=                                   # optional, comma-separated
 ```
+
+`LEGACY_SHELF_NAMES` lists shelf-button names from an older, differently named
+build, so the installer also cleans those up. It is environment-specific, so it
+lives only in `.env`, never in the repository.
 
 **Usage**
 

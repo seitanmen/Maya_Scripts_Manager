@@ -7,10 +7,11 @@
 # スクリーンショットは Release アセットとしてホスト（リポジトリ本体には置かない）
 screenshot_*.png
 
-# アイコン実体は repo/icons（L:\MayaScriptsManager\repo\icons）に一本化。
-# git ではツール自身のアイコンとソース素材(psb)のみ管理する。
+# アイコン実体は配布先の repo/icons に一本化。
+# git ではツール自身のシェルフアイコンのみ管理する。
 repo/icons/*.png
 !repo/icons/mayascriptsmanager.png
+repo/icons/*.psb
 
 # OMC / エージェントの内部状態
 .omc/

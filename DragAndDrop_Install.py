@@ -15,7 +15,7 @@ What it does / 動作:
          <here>/repo/icons/mayascriptsmanager.png <- shelf icon
          <here>/repo/                            <- script list (JSON)
     2. Creates/updates <here>/.env (SCRIPT_REPO_PATH = <here>/repo),
-       keeping other existing keys (e.g. LANG).
+       keeping other existing keys (e.g. LANG, LEGACY_SHELF_NAMES).
     3. Adds a shelf button that loads the tool from this location.
 
 License: GPL-3.0 (see LICENSE)
@@ -111,8 +111,19 @@ def _writeEnv(baseDir, repoPath):
         return None
 
 
-def _removeExistingButtons():
-    """全シェルフから本ツールの旧/新ボタンを削除（掃除+重複防止）。戻り値: 削除数"""
+def _legacyNames(baseDir):
+    """.env の LEGACY_SHELF_NAMES（カンマ区切り）を小文字のリストで返す。
+
+    旧名で配布していた頃のシェルフボタンも掃除したい場合に使う。値は配布
+    環境ごとに異なるため、コードに埋め込まず .env で指定する。
+    """
+    raw = _readEnv(baseDir + "/.env").get("LEGACY_SHELF_NAMES", "")
+    return [n.strip().lower() for n in raw.split(",") if n.strip()]
+
+
+def _removeExistingButtons(baseDir):
+    """全シェルフから本ツールのボタンを削除（掃除+重複防止）。戻り値: 削除数"""
+    names = ["mayascriptsmanager"] + _legacyNames(baseDir)
     removed = 0
     try:
         g = mel.eval("$tmp = $gShelfTopLevel")
@@ -133,8 +144,8 @@ def _removeExistingButtons():
             except Exception:
                 continue
             low = cmd.lower()
-            if ("vmtscriptmanager" in low or "mayascriptsmanager" in low
-                    or lbl in ("VMTScriptManager", "MayaScriptsManager")):
+            lowLbl = lbl.lower()
+            if any(n in low for n in names) or lowLbl in names:
                 try:
                     cmds.deleteUI(btn)
                     removed += 1
@@ -171,7 +182,7 @@ def install():
     icon = iconPath if os.path.isfile(iconPath) else "commandButton.png"
 
     # 3) 旧/重複ボタンを掃除してから、現在のシェルフタブに追加
-    removed = _removeExistingButtons()
+    removed = _removeExistingButtons(baseDir)
 
     gShelfTopLevel = mel.eval("$tmp = $gShelfTopLevel")
     currentShelf = cmds.tabLayout(gShelfTopLevel, query=True, selectTab=True)
