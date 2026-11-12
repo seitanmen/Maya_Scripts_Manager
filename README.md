@@ -113,6 +113,8 @@ with open(script_path, encoding='utf-8') as f:
     旧形式のファイルは、確認のうえ上書きするとこのマシンの所有になります。
     所有者情報は各スクリプト項目の追加フィールド `exportOwner` なので、
     旧バージョンでもそのまま読み込めます。
+  - 読み込みも同じダイアログで選びます（ファイルをダブルクリックでもすぐ読み込み）。
+    同名のスクリプトは上書きせずスキップします。
 
 ---
 
@@ -182,6 +184,8 @@ lives only in `.env`, never in the repository.
   format) becomes yours after you confirm overwriting it. The owner info is an
   extra `exportOwner` field inside each script entry, so older versions can
   still import the file.
+- *Import List* uses the same dialog (double-click a file to import it right
+  away). Scripts whose names already exist are skipped, not overwritten.
 
 Note: `repo/*.json` (script data) and runtime icons are not tracked in this repo;
 they live in the distribution `repo/` folder and are brought in via Import.

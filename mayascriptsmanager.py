@@ -120,6 +120,13 @@ STRINGS = {
                                 "After overwriting, only this machine can overwrite it.\n"
                                 "Overwrite it?"},
     "exp_overwrite":     {"ja": "「{}」を上書きしますか？",       "en": "Overwrite \"{}\"?"},
+
+    # 読み込みダイアログ (書き出しと同じウィンドウ) / Import dialog
+    "imp_title":         {"ja": "リストの読み込み",               "en": "Import List"},
+    "imp_files":         {"ja": "フォルダ内の JSON (クリックで選択 / ダブルクリックで読み込み):",
+                          "en": "JSON files in folder (click to select / double-click to import):"},
+    "imp_btn":           {"ja": "読み込み",                       "en": "Import"},
+    "imp_err_missing":   {"ja": "ファイルが見つかりません:\n{}",  "en": "File not found:\n{}"},
 }
 
 # 書き出した JSON の所有者情報。旧バージョンとの互換性のため、JSON の最上位には
@@ -810,22 +817,39 @@ class MayaScriptsManagerUI:
         標準のファイルダイアログは独自に上書き確認を出してしまい、所有者の
         チェックより先に「上書き」を選ばせてしまうため使わない。
         """
+        return self.fileListDialog("export")
+
+    def importDialog(self):
+        """読み込むファイルを選ぶダイアログ（書き出しと同じウィンドウ）。"""
+        return self.fileListDialog("import")
+
+    def fileListDialog(self, mode):
+        """書き出し / 読み込み共通のファイル選択ダイアログ。
+
+        mode: "export" または "import"。選んだパス（キャンセル時は None）を返す。
+        フォルダとファイル名は書き出し / 読み込みで別々に記憶する。
+        """
+        self._expMode = mode
         self._expResult = None
+        dirVar = "MayaScriptsManager_%sDir" % mode
+        nameVar = "MayaScriptsManager_%sName" % mode
         folder = self.repoStartDir()
-        if cmds.optionVar(exists="MayaScriptsManager_exportDir"):
-            last = cmds.optionVar(q="MayaScriptsManager_exportDir")
+        if cmds.optionVar(exists=dirVar):
+            last = cmds.optionVar(q=dirVar)
             if last and os.path.isdir(last):
                 folder = last
         if not folder:
             folder = cmds.internalVar(userAppDir=True)
         self._expStartFolder = os.path.normpath(folder)
         self._expStartName = ""
-        if cmds.optionVar(exists="MayaScriptsManager_exportName"):
-            self._expStartName = cmds.optionVar(q="MayaScriptsManager_exportName")
-        cmds.layoutDialog(ui=self._buildExportDialog, title=self.tr("exp_title"))
+        if cmds.optionVar(exists=nameVar):
+            self._expStartName = cmds.optionVar(q=nameVar)
+        title = self.tr("imp_title" if mode == "import" else "exp_title")
+        cmds.layoutDialog(ui=self._buildExportDialog, title=title)
         return self._expResult
 
     def _buildExportDialog(self):
+        isImport = getattr(self, "_expMode", "export") == "import"
         form = cmds.setParent(q=True)
         cmds.formLayout(form, edit=True, width=480)
         col = cmds.columnLayout(adjustableColumn=True, rowSpacing=5, parent=form)
@@ -836,14 +860,17 @@ class MayaScriptsManagerUI:
                                               changeCommand=lambda *a: self._expRefresh())
         cmds.button(label=self.tr("exp_browse"), command=self._expBrowse)
         cmds.setParent(col)
-        cmds.text(label=self.tr("exp_files"), align="left")
-        self._expList = cmds.textScrollList(height=160, selectCommand=self._expPick)
+        cmds.text(label=self.tr("imp_files" if isImport else "exp_files"), align="left")
+        listArgs = dict(height=160, selectCommand=self._expPick)
+        if isImport:
+            listArgs["doubleClickCommand"] = self._expDo
+        self._expList = cmds.textScrollList(**listArgs)
         cmds.rowLayout(numberOfColumns=2, adjustableColumn=2, parent=col)
         cmds.text(label=self.tr("exp_name"))
         self._expNameField = cmds.textField(text=self._expStartName)
         cmds.setParent(col)
         self.makeButtonRow(col, [
-            (self.tr("exp_btn"), self._expDo),
+            (self.tr("imp_btn" if isImport else "exp_btn"), self._expDo),
             (self.tr("btn_cancel"), lambda *a: cmds.layoutDialog(dismiss="cancel")),
         ])
         cmds.formLayout(form, edit=True, attachForm=[
@@ -889,10 +916,16 @@ class MayaScriptsManagerUI:
             cmds.confirmDialog(title=self.tr("err_title"), message=self.tr("exp_err_folder", folder))
             return
         path = os.path.join(folder, name)
-        if not self.confirmExportTarget(path):
+        mode = getattr(self, "_expMode", "export")
+        if mode == "import":
+            if not os.path.isfile(path):
+                cmds.confirmDialog(title=self.tr("err_title"),
+                                   message=self.tr("imp_err_missing", path))
+                return
+        elif not self.confirmExportTarget(path):
             return
-        cmds.optionVar(sv=("MayaScriptsManager_exportDir", folder))
-        cmds.optionVar(sv=("MayaScriptsManager_exportName", name))
+        cmds.optionVar(sv=("MayaScriptsManager_%sDir" % mode, folder))
+        cmds.optionVar(sv=("MayaScriptsManager_%sName" % mode, name))
         self._expResult = path
         cmds.layoutDialog(dismiss="ok")
 
@@ -961,15 +994,8 @@ class MayaScriptsManagerUI:
 
     def importScripts(self, *args):
         """外部ファイルからスクリプトをインポート"""
-        dialogArgs = dict(
-            fileMode=1,  # ファイル選択
-            fileFilter="JSON Files (*.json)",
-            dialogStyle=2
-        )
-        startDir = self.repoStartDir()  # .env のリポジトリパス
-        if startDir:
-            dialogArgs["startingDirectory"] = startDir
-        importPath = cmds.fileDialog2(**dialogArgs)
+        path = self.importDialog()  # 書き出しと同じウィンドウ
+        importPath = [path] if path else None
 
         if importPath:
             try:
