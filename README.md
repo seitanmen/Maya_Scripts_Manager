@@ -107,6 +107,12 @@ with open(script_path, encoding='utf-8') as f:
   - ダブルクリック … 現在のシェルフにボタンとして追加
   - 「選択したスクリプトを実行」／「選択したスクリプトを削除」
   - 「リストの書き出し」／「リストの読み込み」… JSON でエクスポート／インポート（共有用）
+  - 書き出し先は専用ダイアログで選びます（フォルダ内の JSON と所有者を一覧表示）。
+    書き出した JSON にはマシン固有の ID（ハッシュ化したもの）が入り、
+    **別のマシンが書き出したファイルは上書きできません**。所有者情報の無い
+    旧形式のファイルは、確認のうえ上書きするとこのマシンの所有になります。
+    所有者情報は各スクリプト項目の追加フィールド `exportOwner` なので、
+    旧バージョンでもそのまま読み込めます。
 
 ---
 
@@ -170,6 +176,12 @@ lives only in `.env`, never in the repository.
   double-click command.
 - **Script List** tab: click to load into the form, double-click to add to the
   current shelf, plus *Run / Delete Selected* and *Export / Import List*.
+  Export uses its own dialog that lists the JSON files in the folder with their
+  owner. Exported JSON carries a hashed machine ID, and **a file exported by
+  another machine cannot be overwritten**. A file without owner info (older
+  format) becomes yours after you confirm overwriting it. The owner info is an
+  extra `exportOwner` field inside each script entry, so older versions can
+  still import the file.
 
 Note: `repo/*.json` (script data) and runtime icons are not tracked in this repo;
 they live in the distribution `repo/` folder and are brought in via Import.

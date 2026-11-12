@@ -13,6 +13,11 @@ import maya.cmds as cmds
 import maya.mel as mel
 import json
 import os
+import sys
+import hashlib
+import datetime
+import platform
+import uuid
 from functools import partial
 
 
@@ -88,7 +93,41 @@ STRINGS = {
     "btn_delete":        {"ja": "削除",                           "en": "Delete"},
 
     "credit":            {"ja": "Developed by seitanmen",        "en": "Developed by seitanmen"},
+
+    # 書き出しダイアログ / 所有者チェック (Export dialog / owner check)
+    "exp_title":         {"ja": "リストの書き出し",               "en": "Export List"},
+    "exp_folder":        {"ja": "フォルダ:",                      "en": "Folder:"},
+    "exp_browse":        {"ja": "参照",                           "en": "Browse"},
+    "exp_files":         {"ja": "フォルダ内の JSON (クリックで名前に反映):",
+                          "en": "JSON files in folder (click to use the name):"},
+    "exp_name":          {"ja": "ファイル名:",                    "en": "File name:"},
+    "exp_this_machine":  {"ja": "このマシン: {}",                 "en": "This machine: {}"},
+    "exp_btn":           {"ja": "書き出し",                       "en": "Export"},
+    "own_mine":          {"ja": "このマシン",                     "en": "this machine"},
+    "own_other":         {"ja": "他のマシン: {}",                 "en": "other machine: {}"},
+    "own_none":          {"ja": "所有者なし",                     "en": "no owner"},
+    "own_invalid":       {"ja": "読み込めない",                   "en": "unreadable"},
+    "exp_err_name":      {"ja": "ファイル名を入力してください。", "en": "Please enter a file name."},
+    "exp_err_folder":    {"ja": "フォルダが存在しません:\n{}",    "en": "Folder does not exist:\n{}"},
+    "exp_blocked":       {"ja": "「{}」は別のマシン ({}) が書き出したファイルです。\n"
+                                "上書きできません。別のファイル名で書き出してください。",
+                          "en": "\"{}\" was exported by another machine ({}).\n"
+                                "It cannot be overwritten. Please export with another file name."},
+    "exp_claim":         {"ja": "「{}」には所有者の情報がありません。\n"
+                                "上書きすると、以後このマシン以外からは上書きできなくなります。\n"
+                                "上書きしますか？",
+                          "en": "\"{}\" has no owner information.\n"
+                                "After overwriting, only this machine can overwrite it.\n"
+                                "Overwrite it?"},
+    "exp_overwrite":     {"ja": "「{}」を上書きしますか？",       "en": "Overwrite \"{}\"?"},
 }
+
+# 書き出した JSON の所有者情報。旧バージョンとの互換性のため、JSON の最上位には
+# 置かず「各スクリプト項目の中の追加フィールド」として書く（旧バージョンは
+# 知らないフィールドを読み飛ばすので、そのまま読み込める）。
+# Owner info of an exported JSON. Stored as an extra field inside every script
+# entry (not as a top-level key) so older versions can still import the file.
+OWNER_FIELD = "exportOwner"
 
 
 class MayaScriptsManagerUI:
@@ -576,7 +615,7 @@ class MayaScriptsManagerUI:
         # 各スクリプトを「アイコン＋名前」の行として追加（項目ごとに枠で囲む）
         for scriptName in self.Scripts.keys():
             info = self.Scripts[scriptName]
-            icon = self.resolveIcon(info.get("icon", ""))
+            icon = self.listIcon(self.resolveIcon(info.get("icon", "")))
             # 項目ごとの枠（境界を明示）
             # ※ -borderStyle は新しいMayaで廃止フラグのため使用しない
             frame = cmds.frameLayout(
@@ -628,6 +667,51 @@ class MayaScriptsManagerUI:
                     return cand
         return "commandButton.png"
 
+    LIST_ICON_SIZE = 32  # リストのアイコン表示サイズ (px) / icon size in the list
+
+    def listIcon(self, iconPath):
+        """リスト表示用に、アイコンを LIST_ICON_SIZE 四方に揃えたパスを返す。
+
+        iconTextButton は画像を元のサイズのまま描くため、32x32 以外の画像は
+        縦横比を保って縮小・中央寄せした PNG をユーザー設定フォルダに
+        キャッシュして使う。読めない場合や Maya 既定アイコンは元のまま返す。
+        """
+        size = self.LIST_ICON_SIZE
+        if not iconPath or not os.path.isfile(iconPath):
+            return iconPath
+        try:
+            try:
+                from PySide6 import QtGui, QtCore
+            except ImportError:
+                from PySide2 import QtGui, QtCore
+            img = QtGui.QImage(iconPath)
+            if img.isNull() or (img.width() == size and img.height() == size):
+                return iconPath
+            import hashlib
+            st = os.stat(iconPath)
+            key = "%s|%s|%s|%d" % (os.path.abspath(iconPath), st.st_mtime, st.st_size, size)
+            cacheDir = os.path.join(cmds.internalVar(userAppDir=True),
+                                    "maya_scripts_manager_icons")
+            cachePath = os.path.join(
+                cacheDir, hashlib.md5(key.encode("utf-8")).hexdigest() + ".png")
+            if os.path.isfile(cachePath):
+                return cachePath
+            if not os.path.isdir(cacheDir):
+                os.makedirs(cacheDir)
+            scaled = img.scaled(size, size, QtCore.Qt.KeepAspectRatio,
+                                QtCore.Qt.SmoothTransformation)
+            canvas = QtGui.QImage(size, size, QtGui.QImage.Format_ARGB32)
+            canvas.fill(QtCore.Qt.transparent)
+            painter = QtGui.QPainter(canvas)
+            painter.drawImage((size - scaled.width()) // 2,
+                              (size - scaled.height()) // 2, scaled)
+            painter.end()
+            if canvas.save(cachePath, "PNG"):
+                return cachePath
+        except Exception:
+            pass
+        return iconPath
+
     def highlightSelected(self, scriptName):
         """選択中の行だけ背景色を付けて強調する"""
         for name, btn in self.scriptButtons.items():
@@ -638,27 +722,242 @@ class MayaScriptsManagerUI:
             else:
                 cmds.iconTextButton(btn, edit=True, enableBackground=False)
 
-    def exportScripts(self, *args):
-        """スクリプトを外部ファイルにエクスポート"""
-        dialogArgs = dict(
-            fileMode=0,  # 保存ファイル選択
-            fileFilter="JSON Files (*.json)",
-            dialogStyle=2
-        )
-        startDir = self.repoStartDir()  # .env のリポジトリパス
-        if startDir:
-            dialogArgs["startingDirectory"] = startDir
-        exportPath = cmds.fileDialog2(**dialogArgs)
+    # ---- 書き出しの所有者管理 / export ownership ------------------------
+    def machineId(self):
+        """このマシン固有の ID（ハッシュ化した短い文字列）を返す。
 
-        if exportPath:
+        Windows はレジストリの MachineGuid、無ければ MAC アドレス、それも
+        取れなければユーザー設定フォルダに保存した乱数 ID を元にする。
+        元の値は共有ファイルに残さないようハッシュ化する。
+        """
+        if getattr(self, "_machineId", None):
+            return self._machineId
+        raw = ""
+        if sys.platform.startswith("win"):
             try:
-                with open(exportPath[0], 'w', encoding='utf-8') as f:
-                    json.dump(self.Scripts, f, indent=4, ensure_ascii=False)
-                cmds.confirmDialog(title=self.tr("export_ok_title"),
-                                   message=self.tr("export_ok_msg", exportPath[0]))
-            except Exception as e:
-                cmds.confirmDialog(title=self.tr("export_err_title"),
-                                   message=self.tr("export_err_msg", str(e)))
+                import winreg
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                     r"SOFTWARE\Microsoft\Cryptography", 0,
+                                     winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+                raw = winreg.QueryValueEx(key, "MachineGuid")[0]
+                winreg.CloseKey(key)
+            except Exception:
+                raw = ""
+        if not raw:
+            node = uuid.getnode()
+            if not (node >> 40) & 1:  # 乱数で作られた値は使わない
+                raw = "%012x" % node
+        if not raw:
+            idFile = os.path.join(cmds.internalVar(userAppDir=True),
+                                  "maya_scripts_manager_machine_id.txt")
+            try:
+                if os.path.isfile(idFile):
+                    with open(idFile, "r", encoding="utf-8") as f:
+                        raw = f.read().strip()
+                if not raw:
+                    raw = uuid.uuid4().hex
+                    with open(idFile, "w", encoding="utf-8") as f:
+                        f.write(raw)
+            except Exception:
+                raw = platform.node()
+        self._machineId = hashlib.sha256(
+            ("MayaScriptsManager:" + raw).encode("utf-8")).hexdigest()[:16]
+        return self._machineId
+
+    def machineName(self):
+        return platform.node() or os.environ.get("COMPUTERNAME", "") or "unknown"
+
+    def readOwner(self, path):
+        """書き出し先 JSON の所有者を調べる。
+
+        戻り値: (状態, マシン名)
+          "new"     … ファイルが無い
+          "mine"    … このマシンが書き出したもの
+          "other"   … 別のマシンが書き出したもの（上書き禁止）
+          "none"    … 所有者情報が無い（旧バージョンで書き出したもの等）
+          "invalid" … JSON として読めない
+        """
+        if not os.path.isfile(path):
+            return ("new", "")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return ("invalid", "")
+        if not isinstance(data, dict):
+            return ("invalid", "")
+        for info in data.values():
+            owner = info.get(OWNER_FIELD) if isinstance(info, dict) else None
+            if isinstance(owner, dict) and owner.get("id"):
+                if owner.get("id") == self.machineId():
+                    return ("mine", owner.get("machine", ""))
+                return ("other", owner.get("machine", "") or owner.get("id", ""))
+        return ("none", "")
+
+    def ownerLabel(self, status, machine):
+        if status == "mine":
+            return self.tr("own_mine")
+        if status == "other":
+            return self.tr("own_other", machine)
+        if status == "invalid":
+            return self.tr("own_invalid")
+        return self.tr("own_none")
+
+    # ---- 書き出しダイアログ / export dialog ------------------------------
+    def exportDialog(self):
+        """書き出し先を選ぶ専用ダイアログ。選んだパス（キャンセル時は None）を返す。
+
+        標準のファイルダイアログは独自に上書き確認を出してしまい、所有者の
+        チェックより先に「上書き」を選ばせてしまうため使わない。
+        """
+        self._expResult = None
+        folder = self.repoStartDir()
+        if cmds.optionVar(exists="MayaScriptsManager_exportDir"):
+            last = cmds.optionVar(q="MayaScriptsManager_exportDir")
+            if last and os.path.isdir(last):
+                folder = last
+        if not folder:
+            folder = cmds.internalVar(userAppDir=True)
+        self._expStartFolder = os.path.normpath(folder)
+        self._expStartName = ""
+        if cmds.optionVar(exists="MayaScriptsManager_exportName"):
+            self._expStartName = cmds.optionVar(q="MayaScriptsManager_exportName")
+        cmds.layoutDialog(ui=self._buildExportDialog, title=self.tr("exp_title"))
+        return self._expResult
+
+    def _buildExportDialog(self):
+        form = cmds.setParent(q=True)
+        cmds.formLayout(form, edit=True, width=480)
+        col = cmds.columnLayout(adjustableColumn=True, rowSpacing=5, parent=form)
+        cmds.text(label=self.tr("exp_this_machine", self.machineName()), align="left")
+        cmds.rowLayout(numberOfColumns=3, adjustableColumn=2, parent=col)
+        cmds.text(label=self.tr("exp_folder"))
+        self._expFolderField = cmds.textField(text=self._expStartFolder,
+                                              changeCommand=lambda *a: self._expRefresh())
+        cmds.button(label=self.tr("exp_browse"), command=self._expBrowse)
+        cmds.setParent(col)
+        cmds.text(label=self.tr("exp_files"), align="left")
+        self._expList = cmds.textScrollList(height=160, selectCommand=self._expPick)
+        cmds.rowLayout(numberOfColumns=2, adjustableColumn=2, parent=col)
+        cmds.text(label=self.tr("exp_name"))
+        self._expNameField = cmds.textField(text=self._expStartName)
+        cmds.setParent(col)
+        self.makeButtonRow(col, [
+            (self.tr("exp_btn"), self._expDo),
+            (self.tr("btn_cancel"), lambda *a: cmds.layoutDialog(dismiss="cancel")),
+        ])
+        cmds.formLayout(form, edit=True, attachForm=[
+            (col, "top", 8), (col, "left", 8), (col, "right", 8), (col, "bottom", 8)])
+        self._expRefresh()
+
+    def _expRefresh(self):
+        folder = cmds.textField(self._expFolderField, q=True, text=True)
+        cmds.textScrollList(self._expList, edit=True, removeAll=True)
+        self._expFiles = []
+        if not os.path.isdir(folder):
+            return
+        for name in sorted(os.listdir(folder), key=lambda s: s.lower()):
+            path = os.path.join(folder, name)
+            if not name.lower().endswith(".json") or not os.path.isfile(path):
+                continue
+            status, machine = self.readOwner(path)
+            self._expFiles.append(name)
+            cmds.textScrollList(self._expList, edit=True,
+                                append="{}    [{}]".format(name, self.ownerLabel(status, machine)))
+
+    def _expBrowse(self, *args):
+        res = cmds.fileDialog2(fileMode=3, dialogStyle=2,
+                               startingDirectory=cmds.textField(self._expFolderField, q=True, text=True))
+        if res:
+            cmds.textField(self._expFolderField, edit=True, text=os.path.normpath(res[0]))
+            self._expRefresh()
+
+    def _expPick(self, *args):
+        idx = cmds.textScrollList(self._expList, q=True, selectIndexedItem=True) or []
+        if idx and idx[0] - 1 < len(self._expFiles):
+            cmds.textField(self._expNameField, edit=True, text=self._expFiles[idx[0] - 1])
+
+    def _expDo(self, *args):
+        folder = cmds.textField(self._expFolderField, q=True, text=True).strip()
+        name = cmds.textField(self._expNameField, q=True, text=True).strip()
+        if not name:
+            cmds.confirmDialog(title=self.tr("err_title"), message=self.tr("exp_err_name"))
+            return
+        if not name.lower().endswith(".json"):
+            name += ".json"
+        if not os.path.isdir(folder):
+            cmds.confirmDialog(title=self.tr("err_title"), message=self.tr("exp_err_folder", folder))
+            return
+        path = os.path.join(folder, name)
+        if not self.confirmExportTarget(path):
+            return
+        cmds.optionVar(sv=("MayaScriptsManager_exportDir", folder))
+        cmds.optionVar(sv=("MayaScriptsManager_exportName", name))
+        self._expResult = path
+        cmds.layoutDialog(dismiss="ok")
+
+    def confirmExportTarget(self, path):
+        """書き出してよいか確認する。別マシンのファイルは常に拒否。"""
+        status, machine = self.readOwner(path)
+        base = os.path.basename(path)
+        if status == "other":
+            cmds.confirmDialog(title=self.tr("export_err_title"),
+                               message=self.tr("exp_blocked", base, machine))
+            return False
+        if status in ("none", "invalid"):
+            msg = self.tr("exp_claim", base)
+        elif status == "mine":
+            msg = self.tr("exp_overwrite", base)
+        else:
+            return True
+        ans = cmds.confirmDialog(title=self.tr("overwrite_title"), message=msg,
+                                 button=[self.tr("btn_overwrite"), self.tr("btn_cancel")],
+                                 defaultButton=self.tr("btn_cancel"),
+                                 cancelButton=self.tr("btn_cancel"),
+                                 dismissString=self.tr("btn_cancel"))
+        return ans == self.tr("btn_overwrite")
+
+    def writeExport(self, path):
+        """所有者情報を付けて書き出す。直前にもう一度所有者を確認する。
+
+        形式は従来どおり「スクリプト名 -> 項目」の辞書。所有者情報は各項目の
+        追加フィールド (OWNER_FIELD) なので、旧バージョンでもそのまま読める。
+        """
+        status, machine = self.readOwner(path)
+        if status == "other":  # ダイアログ表示中に別マシンが書き出した場合
+            raise RuntimeError(self.tr("exp_blocked", os.path.basename(path), machine))
+        owner = {
+            "id": self.machineId(),
+            "machine": self.machineName(),
+            "exportedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        data = {}
+        for name, info in self.Scripts.items():
+            data[name] = {
+                "content": info.get("content", ""),
+                "doubleClickContent": info.get("doubleClickContent", ""),
+                "tooltips": info.get("tooltips", ""),
+                "icon": info.get("icon", ""),
+                "type": info.get("type", ""),
+                OWNER_FIELD: owner,
+            }
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        os.replace(tmp, path)
+
+    def exportScripts(self, *args):
+        """スクリプトを外部ファイルにエクスポート（別マシンのファイルは上書きしない）"""
+        exportPath = self.exportDialog()
+        if not exportPath:
+            return
+        try:
+            self.writeExport(exportPath)
+            cmds.confirmDialog(title=self.tr("export_ok_title"),
+                               message=self.tr("export_ok_msg", exportPath))
+        except Exception as e:
+            cmds.confirmDialog(title=self.tr("export_err_title"),
+                               message=self.tr("export_err_msg", str(e)))
 
     def importScripts(self, *args):
         """外部ファイルからスクリプトをインポート"""
@@ -681,6 +980,8 @@ class MayaScriptsManagerUI:
                 added = 0
                 skipped = 0
                 for name, content in imported_scripts.items():
+                    if not isinstance(content, dict):
+                        continue  # スクリプト項目でないものは無視
                     if name in self.Scripts:
                         skipped += 1
                         continue
